@@ -10,6 +10,7 @@ import javax.servlet.http.Cookie;
 import javax.servlet.http.HttpServletRequest;
 import javax.servlet.http.HttpServletResponse;
 
+import io.openvidu.call.java.models.Notifications;
 import io.openvidu.java.client.*;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -19,12 +20,16 @@ import org.springframework.http.HttpEntity;
 import org.springframework.http.HttpMethod;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
+import org.springframework.messaging.handler.annotation.MessageMapping;
+import org.springframework.messaging.handler.annotation.Payload;
 import org.springframework.messaging.simp.SimpMessageSendingOperations;
 import org.springframework.web.bind.annotation.*;
 
 import io.openvidu.call.java.models.RecordingData;
 import io.openvidu.call.java.services.OpenViduService;
 import org.springframework.web.client.RestTemplate;
+
+import static java.lang.Thread.sleep;
 
 @CrossOrigin(origins = "*")
 @RestController
@@ -40,11 +45,17 @@ public class SessionController {
   @Value("${PRERECORDED_PATH:/opt/openvidu/kurento-logs/}")
   private String preRecordedPath;
 
+  @Value("${notifyTo}")
+  private String notifyTo;
+
   @Autowired
   private OpenViduService openviduService;
   @Autowired
   RestTemplate restTemplate;
   private static SimpMessageSendingOperations messagingTemplate;
+
+  private Notifications notifications = new Notifications();
+  boolean isWaiting = false;
 
   @Autowired
   public void SessionController(SimpMessageSendingOperations messagingTemplate) {
@@ -75,6 +86,7 @@ public class SessionController {
       long date = -1;
       String nickname = "";
 
+      notifyTo = params.get("notifyTo").toString();
       String sessionId = params.get("sessionId").toString();
       if (params.containsKey("nickname")) {
         nickname = params.get("nickname").toString();
@@ -93,46 +105,87 @@ public class SessionController {
       response.put("recordingEnabled", IS_RECORDING_ENABLED);
       response.put("recordings", new ArrayList<Recording>());
 
-      Connection cameraConnection = this.openviduService.createConnection(sessionCreated, nickname, role);
-      Connection screenConnection = this.openviduService.createConnection(sessionCreated, nickname, role);
+      notifications.setSessionId(sessionId);
+      Thread threadName=Thread.currentThread();
+      Thread thread1 = new Thread();
+      // Push notifications to front-end
 
-      response.put("cameraToken", cameraConnection.getToken());
-      response.put("screenToken", screenConnection.getToken());
+      System.out.println("Notifcations"+notifications);
+      
+      if(notifyTo.equals("SUPPORT")){
+        messagingTemplate.convertAndSend("/topic/support",notifications);
+        System.out.println(notifications.getSessionId());
 
-      if (IS_RECORDING_ENABLED && isSessionCreator && !hasValidToken) {
-        /**
-         * ! *********** WARN *********** !
-         *
-         * To identify who is able to manage session recording, the code sends a cookie
-         * with a token to the session creator. The relation between cookies and
-         * sessions are stored in backend memory.
-         *
-         * This authentication & authorization system is pretty basic and it is not for
-         * production. We highly recommend IMPLEMENT YOUR OWN USER MANAGEMENT with
-         * persistence for a properly and secure recording feature.
-         *
-         * ! *********** WARN *********** !
-         **/
-
-        String uuid = UUID.randomUUID().toString();
-        date = System.currentTimeMillis();
-        String recordingToken = cameraConnection.getToken() + "&" + OpenViduService.RECORDING_TOKEN_NAME + "="
-                + uuid + "&createdAt=" + date;
-
-        Cookie cookie = new Cookie(OpenViduService.RECORDING_TOKEN_NAME, recordingToken);
-        res.addCookie(cookie);
-
-        RecordingData recData = new RecordingData(recordingToken, "");
-        this.openviduService.recordingMap.put(sessionId, recData);
       }
+      else if(notifyTo.equals("SUPERVISOR")){
+        messagingTemplate.convertAndSend("/topic/supervisor",notifications);
+        System.out.println(notifications.getSessionId());
 
-      if (IS_RECORDING_ENABLED) {
-        if (date == -1) {
-          date = openviduService.getDateFromCookie(recordingTokenCookie);
+      }
+//      messagingTemplate.convertAndSend("/topic/notification",notifications);
+//      System.out.println(notifications.getSessionId());
+
+      try{
+        System.out.println(threadName+" is waiting");
+        isWaiting = true;
+        wait();
+        if (isWaiting){
+          Thread.currentThread().interrupt();
         }
-        List<Recording> recordings = openviduService.listRecordingsBySessionIdAndDate(sessionId, date);
-        response.put("recordings", recordings);
+        sleep(5000);
+        System.out.println("Thread t2 running again");
+        Connection cameraConnection = this.openviduService.createConnection(sessionCreated, nickname, role);
+        Connection screenConnection = this.openviduService.createConnection(sessionCreated, nickname, role);
+        response.put("cameraToken", cameraConnection.getToken());
+        response.put("screenToken", screenConnection.getToken());
+        System.out.println("Response set");
+        System.out.println("All done");
+        if (IS_RECORDING_ENABLED && isSessionCreator && !hasValidToken) {
+          /**
+           * ! *********** WARN *********** !
+           *
+           * To identify who is able to manage session recording, the code sends a cookie
+           * with a token to the session creator. The relation between cookies and
+           * sessions are stored in backend memory.
+           *
+           * This authentication & authorization system is pretty basic and it is not for
+           * production. We highly recommend IMPLEMENT YOUR OWN USER MANAGEMENT with
+           * persistence for a properly and secure recording feature.
+           *
+           * ! *********** WARN *********** !
+           **/
+
+          String uuid = UUID.randomUUID().toString();
+          date = System.currentTimeMillis();
+          String recordingToken = cameraConnection.getToken() + "&" + OpenViduService.RECORDING_TOKEN_NAME + "="
+                  + uuid + "&createdAt=" + date;
+
+          Cookie cookie = new Cookie(OpenViduService.RECORDING_TOKEN_NAME, recordingToken);
+          res.addCookie(cookie);
+
+          RecordingData recData = new RecordingData(recordingToken, "");
+          this.openviduService.recordingMap.put(sessionId, recData);
+        }
+
+        if (IS_RECORDING_ENABLED) {
+          if (date == -1) {
+            date = openviduService.getDateFromCookie(recordingTokenCookie);
+          }
+          List<Recording> recordings = openviduService.listRecordingsBySessionIdAndDate(sessionId, date);
+          response.put("recordings", recordings);
+        }
+
+
+      } catch (StackOverflowError | InterruptedException e){
+        System.out.println("Getting StackError" + e);
       }
+
+//      Connection cameraConnection = this.openviduService.createConnection(sessionCreated, nickname, role);
+//      Connection screenConnection = this.openviduService.createConnection(sessionCreated, nickname, role);
+//
+//      response.put("cameraToken", cameraConnection.getToken());
+//      response.put("screenToken", screenConnection.getToken());
+
 
       return new ResponseEntity<>(response, HttpStatus.OK);
 
@@ -152,6 +205,17 @@ public class SessionController {
         return new ResponseEntity<>(response, HttpStatus.INTERNAL_SERVER_ERROR);
       }
     }
+  }
+  @MessageMapping("/{notifyTo}")
+  synchronized public void receivedMessage(@Payload String message) {
+    System.out.println("receivedMessage");
+    if(isWaiting) {
+      if(message.contains("true")) {
+        notify();
+        isWaiting = false;
+      }
+    }
+
   }
 
   @GetMapping("/sessionList")
