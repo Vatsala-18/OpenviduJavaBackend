@@ -10,6 +10,7 @@ io\openvidu\call\java\models\WhatsappSubmit.class
 io\openvidu\call\java\controllers\MessageApiController.class
 io\openvidu\call\java\models\RecordingData.class
 io\openvidu\call\java\models\AdminSessionData.class
+io\openvidu\call\java\models\Notifications.class
 io\openvidu\call\java\services\ProxyService$1.class
 io\openvidu\call\java\config\WebConfig.class
 io\openvidu\call\java\constant\allConstants.class

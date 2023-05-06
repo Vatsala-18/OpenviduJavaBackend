@@ -45,8 +45,14 @@ public class SessionController {
   @Value("${PRERECORDED_PATH:/opt/openvidu/kurento-logs/}")
   private String preRecordedPath;
 
-  @Value("${notifyTo}")
-  private String notifyTo;
+  @Value("${support.endpoint}")
+  private String supportEndpoint;
+
+  @Value("${supervisor.endpoint}")
+  private String supervisorEndpoint;
+
+  @Value("${thread.timeout}")
+  private Long threadTimeout;
 
   @Autowired
   private OpenViduService openviduService;
@@ -55,14 +61,13 @@ public class SessionController {
   private static SimpMessageSendingOperations messagingTemplate;
 
   private Notifications notifications = new Notifications();
-  boolean isWaiting = false;
 
   @Autowired
   public void SessionController(SimpMessageSendingOperations messagingTemplate) {
     this.messagingTemplate = messagingTemplate;
   }
 
-  HashMap<String, Object> ThreadMap = new HashMap<>();
+  HashMap<String,Thread> ThreadMap = new HashMap<>();
   ArrayList<HashMap<String, String>> RequestSession = new ArrayList<>();
 
   public boolean isValid;
@@ -85,8 +90,7 @@ public class SessionController {
     try {
       long date = -1;
       String nickname = "";
-
-      notifyTo = params.get("notifyTo").toString();
+      String notifyTo = params.get("notifyTo").toString();
       String sessionId = params.get("sessionId").toString();
       if (params.containsKey("nickname")) {
         nickname = params.get("nickname").toString();
@@ -107,39 +111,24 @@ public class SessionController {
 
       notifications.setSessionId(sessionId);
       Thread threadName=Thread.currentThread();
-      Thread thread1 = new Thread();
-      // Push notifications to front-end
+      ThreadMap.put(sessionId,threadName);
 
-      System.out.println("Notifcations"+notifications);
-      
-      if(notifyTo.equals("SUPPORT")){
-        messagingTemplate.convertAndSend("/topic/support",notifications);
+      if(notifyTo.equals(supportEndpoint)){
+        messagingTemplate.convertAndSend("/topic/"+supportEndpoint,notifications);
         System.out.println(notifications.getSessionId());
 
       }
-      else if(notifyTo.equals("SUPERVISOR")){
-        messagingTemplate.convertAndSend("/topic/supervisor",notifications);
+      else if(notifyTo.equals(supervisorEndpoint)){
+        messagingTemplate.convertAndSend("/topic/"+supervisorEndpoint,notifications);
         System.out.println(notifications.getSessionId());
 
       }
-//      messagingTemplate.convertAndSend("/topic/notification",notifications);
-//      System.out.println(notifications.getSessionId());
-
       try{
-        System.out.println(threadName+" is waiting");
-        isWaiting = true;
-        wait();
-        if (isWaiting){
-          Thread.currentThread().interrupt();
-        }
-        sleep(5000);
-        System.out.println("Thread t2 running again");
-        Connection cameraConnection = this.openviduService.createConnection(sessionCreated, nickname, role);
-        Connection screenConnection = this.openviduService.createConnection(sessionCreated, nickname, role);
-        response.put("cameraToken", cameraConnection.getToken());
-        response.put("screenToken", screenConnection.getToken());
-        System.out.println("Response set");
-        System.out.println("All done");
+          wait(threadTimeout);
+          Connection cameraConnection = this.openviduService.createConnection(sessionCreated, nickname, role);
+          Connection screenConnection = this.openviduService.createConnection(sessionCreated, nickname, role);
+          response.put("cameraToken", cameraConnection.getToken());
+          response.put("screenToken", screenConnection.getToken());
         if (IS_RECORDING_ENABLED && isSessionCreator && !hasValidToken) {
           /**
            * ! *********** WARN *********** !
@@ -178,15 +167,10 @@ public class SessionController {
 
       } catch (StackOverflowError | InterruptedException e){
         System.out.println("Getting StackError" + e);
+        ThreadMap.remove(sessionId);
+        return new ResponseEntity<>(HttpStatus.GATEWAY_TIMEOUT);
       }
-
-//      Connection cameraConnection = this.openviduService.createConnection(sessionCreated, nickname, role);
-//      Connection screenConnection = this.openviduService.createConnection(sessionCreated, nickname, role);
-//
-//      response.put("cameraToken", cameraConnection.getToken());
-//      response.put("screenToken", screenConnection.getToken());
-
-
+      ThreadMap.remove(sessionId);
       return new ResponseEntity<>(response, HttpStatus.OK);
 
     } catch (OpenViduJavaClientException | OpenViduHttpException e) {
@@ -206,16 +190,14 @@ public class SessionController {
       }
     }
   }
-  @MessageMapping("/{notifyTo}")
-  synchronized public void receivedMessage(@Payload String message) {
-    System.out.println("receivedMessage");
-    if(isWaiting) {
-      if(message.contains("true")) {
-        notify();
-        isWaiting = false;
-      }
+  @MessageMapping("/confirmation")
+  synchronized public void receivedMessage(@Payload Notifications message) {
+    Thread thread=ThreadMap.get(message.getSessionId());
+    if(message.getResponse().equalsIgnoreCase("true")){
+      thread.notify();
+    }else if(message.getResponse().equalsIgnoreCase("false")){
+      thread.interrupt();
     }
-
   }
 
   @GetMapping("/sessionList")
